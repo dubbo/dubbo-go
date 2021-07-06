@@ -23,7 +23,6 @@ import (
 )
 
 import (
-	hessian "github.com/apache/dubbo-go-hessian2"
 	"github.com/mitchellh/mapstructure"
 	perrors "github.com/pkg/errors"
 )
@@ -34,19 +33,18 @@ import (
 	"dubbo.apache.org/dubbo-go/v3/common/extension"
 	"dubbo.apache.org/dubbo-go/v3/common/logger"
 	"dubbo.apache.org/dubbo-go/v3/filter"
+	"dubbo.apache.org/dubbo-go/v3/filter/filter_impl/generic"
 	"dubbo.apache.org/dubbo-go/v3/protocol"
 	invocation2 "dubbo.apache.org/dubbo-go/v3/protocol/invocation"
 )
 
 const (
-	// GENERIC_SERVICE defines the filter name
-	GENERIC_SERVICE = "generic_service"
-	// nolint
-	GENERIC_SERIALIZATION_DEFAULT = "true"
+	// GenericService defines the filter name
+	GenericService = "generic_service"
 )
 
 func init() {
-	extension.SetFilter(GENERIC_SERVICE, GetGenericServiceFilter)
+	extension.SetFilter(GenericService, GetGenericServiceFilter)
 }
 
 // nolint
@@ -62,54 +60,52 @@ func (ef *GenericServiceFilter) Invoke(ctx context.Context, invoker protocol.Inv
 	}
 
 	var (
-		ok         bool
-		err        error
-		methodName string
-		newParams  []interface{}
-		genericKey string
-		argsType   []reflect.Type
-		oldParams  []hessian.Object
+		methodName     string
+		genericKey     string
+		invocationArgs []interface{}
+		argsType       []reflect.Type
 	)
 
-	url := invoker.GetURL()
-	methodName = invocation.Arguments()[0].(string)
-	// get service
-	svc := common.ServiceMap.GetServiceByServiceKey(url.Protocol, url.ServiceKey())
-	// get method
-	method := svc.Method()[methodName]
-	if method == nil {
-		logger.Errorf("[Generic Service Filter] Don't have this method: %s", methodName)
-		return &protocol.RPCResult{}
-	}
-	argsType = method.ArgsType()
-	genericKey = invocation.AttachmentsByKey(constant.GENERIC_KEY, GENERIC_SERIALIZATION_DEFAULT)
-	if genericKey == GENERIC_SERIALIZATION_DEFAULT {
-		oldParams, ok = invocation.Arguments()[2].([]hessian.Object)
-	} else {
+	genericKey = invocation.AttachmentsByKey(constant.GENERIC_KEY, constant.GENERIC_SERIALIZATION_DEFAULT)
+	processor := extension.GetGenericProcessor(genericKey)
+	if processor == nil {
 		logger.Errorf("[Generic Service Filter] Don't support this generic: %s", genericKey)
 		return &protocol.RPCResult{}
 	}
-	if !ok {
-		logger.Errorf("[Generic Service Filter] wrong serialization")
+	newArgs, err := processor.Deserialize(invocation.Arguments()[2])
+	if err != nil {
+		logger.Errorf("[Generic Service Filter] Deserialization error")
 		return &protocol.RPCResult{}
 	}
-	if len(oldParams) != len(argsType) {
+	// check method and arguments
+	url := invoker.GetURL()
+	methodName = invocation.Arguments()[0].(string)
+	svc := common.ServiceMap.GetServiceByServiceKey(url.Protocol, url.ServiceKey())
+	method := svc.Method()[methodName]
+	if method == nil {
+		logger.Errorf("[Generic Service Filter] Don't have this method: %s, "+
+			"make sure you have import the package and register it by invoking extension.SetGenericProcessor.", methodName)
+		return &protocol.RPCResult{}
+	}
+	argsType = method.ArgsType()
+	if len(newArgs) != len(argsType) {
 		logger.Errorf("[Generic Service Filter] method:%s invocation arguments number was wrong", methodName)
 		return &protocol.RPCResult{}
 	}
-	// oldParams convert to newParams
-	newParams = make([]interface{}, len(oldParams))
+	// newArgs convert to invocationArgs
+	invocationArgs = make([]interface{}, len(newArgs))
 	for i := range argsType {
-		newParam := reflect.New(argsType[i]).Interface()
-		err = mapstructure.Decode(oldParams[i], newParam)
-		newParam = reflect.ValueOf(newParam).Elem().Interface()
+		newArgument := reflect.New(argsType[i]).Interface()
+		err = mapstructure.Decode(newArgs[i], newArgument)
+		newArgument = reflect.ValueOf(newArgument).Elem().Interface()
 		if err != nil {
 			logger.Errorf("[Generic Service Filter] decode arguments map to struct wrong: error{%v}", perrors.WithStack(err))
 			return &protocol.RPCResult{}
 		}
-		newParams[i] = newParam
+		invocationArgs[i] = newArgument
 	}
-	newInvocation := invocation2.NewRPCInvocation(methodName, newParams, invocation.Attachments())
+	logger.Debugf("[Generic Service Filter] invocationArgs: %v", invocationArgs)
+	newInvocation := invocation2.NewRPCInvocation(methodName, invocationArgs, invocation.Attachments())
 	newInvocation.SetReply(invocation.Reply())
 	return invoker.Invoke(ctx, newInvocation)
 }
@@ -121,7 +117,7 @@ func (ef *GenericServiceFilter) OnResponse(ctx context.Context, result protocol.
 		if v.Kind() == reflect.Ptr {
 			v = v.Elem()
 		}
-		result.SetResult(struct2MapAll(v.Interface()))
+		result.SetResult(generic.Struct2MapAll(v.Interface()))
 	}
 	return result
 }
