@@ -70,7 +70,7 @@ func SetProviderConfig(p ProviderConfig) {
 // ProviderInit loads config file to init provider config
 func ProviderInit(confProFile string) error {
 	if len(confProFile) == 0 {
-		return perrors.Errorf("application configure(provider) file name is nil")
+		return nil
 	}
 	providerConfig = &ProviderConfig{}
 	fileStream, err := yaml.UnmarshalYMLConfig(confProFile, providerConfig)
