@@ -83,7 +83,7 @@ func SetConsumerConfig(c ConsumerConfig) {
 // ConsumerInit loads config file to init consumer config
 func ConsumerInit(confConFile string) error {
 	if confConFile == "" {
-		return perrors.Errorf("application configure(consumer) file name is nil")
+		return nil
 	}
 	consumerConfig = &ConsumerConfig{}
 	fileStream, err := yaml.UnmarshalYMLConfig(confConFile, consumerConfig)
